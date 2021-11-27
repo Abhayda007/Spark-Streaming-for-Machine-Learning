@@ -12,6 +12,8 @@ from pyspark.sql import functions as F
 
 
 from sklearn.naive_bayes import MultinomialNB
+from sklearn.linear_model import SGDClassifier
+
 from sklearn.feature_extraction.text import TfidfVectorizer
 from sklearn.pipeline import make_pipeline
 
@@ -27,7 +29,7 @@ spark_context = SparkContext.getOrCreate()
 
 sql_context = SQLContext(spark_context)
 
-ssc = StreamingContext(spark_context, 5)
+ssc = StreamingContext(spark_context, 15)
 
 datastream = ssc.socketTextStream("localhost",6100)
 
@@ -47,9 +49,9 @@ def func(x):
 		data = loads(data)
 		df = sql_context.createDataFrame(data.values())
 		#df = df.rdd.map(lambda x : (x[0] , x[1])).collect()
-		df = df.rdd
+		#df = df.rdd
 		
-	return df
+	return df.rdd
 
 
 ## Function to preprocess tweets
@@ -60,7 +62,7 @@ def preprocessing(df):
 	
 	df = df.toDF()
 	df = df.na.drop()
-
+	
 	# Defining regex patterns.
 	urlPattern = r"((http://)[^ ]*|(https://)[^ ]*|( www\.)[^ ]*)"
 	userPattern = '@[^\s]+'
@@ -92,39 +94,99 @@ def train(df):
 	df = df.toDF()
 	
 	X_train = np.array([i[0] for i in df.select('feature1').collect()])
-	Y_train = np.array([i[0] for i in df.select('feature0').collect()])
+	Y_train = np.array([int(i[0]) for i in df.select('feature0').collect()])
 	
 	#print("Xtrain", X_train, type(X_train))
 	#print("YTrain ", Y_train, type(Y_train))
 	
-	vectorizer = TfidfVectorizer()
+	vectorizer = TfidfVectorizer(analyzer='word' , stop_words='english', max_features = 1500)
 	X_train = vectorizer.fit_transform(X_train)
 	
-	print(X_train)
-	print("Type = ", type(X_train))
+	print("Xtrain after :",X_train)
+	print("Ytrain after :",Y_train)
+	#print("Type = ", type(X_train))
 	
-	trained_model = MultinomialNB().partial_fit(X_train, Y_train, classes=np.unique(Y_train))
+	print("DimX = ", X_train.ndim, "DimY", Y_train.ndim)
+	print("ShapeX = ", X_train.shape, "ShapeY", Y_train.shape)
 	
-	print(type(trained_model))
-	print(trained_model.get_params())
+	#trained_model = MultinomialNB().partial_fit(X_train, Y_train, classes=np.unique(Y_train))
+	
+	#print(type(trained_model))
+	#print(trained_model.get_params())
+	
+	naivebayes_pkl = "./model.pkl"
+	
+	if ((os.path.exists(naivebayes_pkl)) and (os.path.getsize(naivebayes_pkl) != 0)):
+		
+		with open(naivebayes_pkl, 'rb') as f: 
+			naivebayes_model = pickle.load(f)
+		
+		f.close()
+		naivebayes_model.partial_fit(X_train, Y_train, classes=np.unique(Y_train))
+		
+		with open(naivebayes_pkl, 'ab') as f: 
+			pickle.dump(naivebayes_model, f)
+		
+		f.close()
+	else:
+		
+		naivebayes_model = MultinomialNB()
+		#naivebayes_model = SGDClassifier(loss='hinge', penalty='l2',alpha=1e-3, random_state=42, max_iter=5, tol=None)
+		
+		
+		naivebayes_model.partial_fit(X_train, Y_train, classes=np.unique(Y_train))
+		
+		with open(naivebayes_pkl, 'wb') as f: 
+			pickle.dump(naivebayes_model, f)
+		
+		f.close()
+		
+	file_size = os.path.getsize(naivebayes_pkl)
+	print("File Size is :", file_size, "bytes")
 	
 	return df.rdd
+	
+def test(df):
+	
+	print("Entered testing")
+	
+	df = df.toDF()
+	X_test = np.array([i[0] for i in df.select('feature1').collect()])
+	
+	vectorizer = TfidfVectorizer(analyzer='word' , stop_words='english', max_features = 1500)
+	X_test = vectorizer.fit_transform(X_test)
+	
+	Y_test = np.array([int(i[0]) for i in df.select('feature0').collect()])
+	
+	naivebayes_pkl = "./model.pkl"
+	
+	with open(naivebayes_pkl, 'rb') as f: 
+			naivebayes_model = pickle.load(f)
 
+	prediction = naivebayes_model.predict(X_test)
+	print(prediction)
+	
+	print(naivebayes_model.score(X_test, Y_test))
+	
+	
 	
 	
 #--------------------Main------------------------------#
 
 
 data = datastream.transform(func)
-#data.pprint(50)
+#data.pprint(25)
 
 
 processedDF = data.transform(preprocessing)
-#processedDF.pprint(50)
+#processedDF.pprint(25)
 
 
-trainDF = processedDF.transform(train)
-trainDF.pprint(25)
+#trainDF = processedDF.transform(train)
+#trainDF.pprint(25)
+
+testDF = processedDF.transform(test)
+testDF.pprint(25)
 
 ssc.start()
 ssc.awaitTermination()
