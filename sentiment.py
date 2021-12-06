@@ -100,10 +100,10 @@ def train(df):
 	X_train = np.array([i[0] for i in df.select('feature1').collect()])
 	Y_train = np.array([int(i[0]) for i in df.select('feature0').collect()])
 	
-	#vectorizer_pkl = "./Vectorizer/Hashing_Vectorizer.pkl"
+	#vectorizer_pkl = "./Vectorizer/SVD_Hashing_Vectorizer.pkl"
 	vectorizer_pkl = "./Vectorizer/PAC_Hashing_Vectorizer.pkl"
-	#vectorizer_pkl = "./Vectorizer/Hashing_Vectorizer.pkl"
-	#vectorizer_pkl = "./Vectorizer/Hashing_Vectorizer.pkl"
+	#vectorizer_pkl = "./Vectorizer/PTRON_Hashing_Vectorizer.pkl"
+	#vectorizer_pkl = "./Vectorizer/BernoulliNB_Hashing_Vectorizer.pkl"
 	
 	if ((os.path.exists(vectorizer_pkl)) and (os.path.getsize(vectorizer_pkl) != 0)):
 		
@@ -171,10 +171,10 @@ def test(df):
 	X_test = np.array([i[0] for i in df.select('feature1').collect()])
 	
 	
-	#vectorizer_pkl = "./Vectorizer/Hashing_Vectorizer.pkl"
+	#vectorizer_pkl = "./Vectorizer/SVD_Hashing_Vectorizer.pkl"
 	vectorizer_pkl = "./Vectorizer/PAC_Hashing_Vectorizer.pkl"
-	#vectorizer_pkl = "./Vectorizer/Hashing_Vectorizer.pkl"
-	#vectorizer_pkl = "./Vectorizer/Hashing_Vectorizer.pkl"
+	#vectorizer_pkl = "./Vectorizer/PTRON_Hashing_Vectorizer.pkl"
+	#vectorizer_pkl = "./Vectorizer/BernoulliNB_Hashing_Vectorizer.pkl"
 	
 	with open(vectorizer_pkl, 'rb') as f: 
 		vectorizer = pickle.load(f)
