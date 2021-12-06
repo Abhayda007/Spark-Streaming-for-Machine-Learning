@@ -10,11 +10,15 @@ from pyspark.sql.types import StructType, StructField, StringType
 from pyspark.sql import functions as F
 
 
-from sklearn.naive_bayes import MultinomialNB
+from sklearn.naive_bayes import MultinomialNB, BernoulliNB
 from sklearn.linear_model import SGDClassifier
+from sklearn.linear_model import Perceptron
+from sklearn.linear_model import PassiveAggressiveClassifier
+from sklearn.cluster import MiniBatchKMeans
 
 from sklearn.feature_extraction.text import HashingVectorizer
 from sklearn.pipeline import make_pipeline
+from sklearn.metrics import classification_report, accuracy_score
 
 import numpy as np
 from json import loads
@@ -30,17 +34,16 @@ def func(x):
 	
 	try:
 		x = x.collect()
-		print(len(x))
+		
 		df = sql_context.createDataFrame(spark_context.emptyRDD(), schema = StructType([StructField("feature0", StringType(), True), StructField("feature1", StringType(), True)]))
 		for data in x:
 			data = loads(data)
 			temp_df = sql_context.createDataFrame(data.values())
-			#df = df.rdd.map(lambda x : (x[0] , x[1])).collect()
-			#df = preprocessing(df)
+			
 			df = df.union(temp_df)
 			
 		df = preprocessing(df)
-		print("DF length ", df.count())	
+		
 		return df.rdd
 		
 	except ValueError:
@@ -62,22 +65,25 @@ def preprocessing(df):
 		seqReplacePattern = r"\1\1"
 		
 		# Replace all URls with 'URL'
-		df = df.withColumn("feature1", F.regexp_replace(df['feature1'], urlPattern, " "))
+		df = df.withColumn("feature1", F.regexp_replace("feature1", urlPattern, " "))
 		
 		# Replace @USERNAME to 'USER'
-		df = df.withColumn("feature1", F.regexp_replace(df['feature1'], userPattern, " "))
+		df = df.withColumn("feature1", F.regexp_replace("feature1", userPattern, " "))
 		
 		# Replace all non alphabets.
-		df = df.withColumn("feature1", F.regexp_replace(df['feature1'], alphaPattern, " "))
+		df = df.withColumn("feature1", F.regexp_replace("feature1", alphaPattern, " "))
 		
-		# Replacing single characters
-		df = df.withColumn("feature1", F.regexp_replace(df['feature1'], r"(?:^| )\w(?:$| )", " "))
+		#converting to lower case
+		df = df.withColumn("feature1", F.lower(df['feature1']))
 		
 		# Replace 3 or more consecutive letters by 2 letter
-		df = df.withColumn("feature1", F.regexp_replace(df['feature1'],  r'(.)\1{2,}', r'\1\1'))
+		df = df.withColumn("feature1", F.regexp_replace("feature1",  r'[^\w\s]|(.)(?=\1\1)', ''))
+		
+		# Replacing single characters
+		df = df.withColumn("feature1", F.regexp_replace("feature1", r"\b\w\b", ""))
 		
 		# Replace more than one white space with a single white space
-		df = df.withColumn("feature1", F.regexp_replace(df['feature1'], r"\s+", " "))
+		df = df.withColumn("feature1", F.regexp_replace("feature1", r"\s+", " "))
 		
 		return df
 	
@@ -90,51 +96,43 @@ def train(df):
 	print("Entered Training")
 	
 	df = df.toDF()
-	print("DF length ", df.count())	
 	
 	X_train = np.array([i[0] for i in df.select('feature1').collect()])
 	Y_train = np.array([int(i[0]) for i in df.select('feature0').collect()])
 	
-	#print("Xtrain", X_train, type(X_train))
-	#print("YTrain ", Y_train, type(Y_train))
-
+	#vectorizer_pkl = "./Vectorizer/Hashing_Vectorizer.pkl"
+	vectorizer_pkl = "./Vectorizer/PAC_Hashing_Vectorizer.pkl"
+	#vectorizer_pkl = "./Vectorizer/Hashing_Vectorizer.pkl"
+	#vectorizer_pkl = "./Vectorizer/Hashing_Vectorizer.pkl"
 	
-	vectorizer_pkl = "./Tokenizer/Hashing_Vectorizer.pkl"
 	if ((os.path.exists(vectorizer_pkl)) and (os.path.getsize(vectorizer_pkl) != 0)):
 		
 		with open(vectorizer_pkl, 'rb') as f: 
 			vectorizer = pickle.load(f)
 		
 		f.close()
-		vectorizer.partial_fit(X_train)
+		vectorizer = vectorizer.partial_fit(X_train)
 		
-		with open(vectorizer_pkl, 'ab') as f: 
+		with open(vectorizer_pkl, 'wb') as f: 
 			pickle.dump(vectorizer, f)
 		
 		f.close()
 	else:
 		
 		vectorizer = HashingVectorizer(analyzer='word' , stop_words='english', n_features = 1000000, norm='l1')
-		vectorizer.partial_fit(X_train)
+		vectorizer = vectorizer.partial_fit(X_train)
 		
 		with open(vectorizer_pkl, 'wb') as f: 
 			pickle.dump(vectorizer, f)
 		
 		f.close()
 	
-	
 	X_train = vectorizer.fit_transform(X_train)
 	
-	
-	#print("Xtrain after :",X_train)
-	#print("Ytrain after :",Y_train)
-	#print("Type = ", type(X_train))
-	
-	print("DimX = ", X_train.ndim, "DimY", Y_train.ndim)
-	print("ShapeX = ", X_train.shape, "ShapeY", Y_train.shape)
-
-	
-	model_pkl = "./Models/SVD_model.pkl"
+	#model_pkl = "./Models/SVD_model.pkl"
+	model_pkl = "./Models/PAC_model.pkl"
+	#model_pkl = "./Models/PTRON_model.pkl"
+	#model_pkl = "./Models/BernoulliNB_model.pkl"
 	
 	if ((os.path.exists(model_pkl)) and (os.path.getsize(model_pkl) != 0)):
 		
@@ -142,25 +140,26 @@ def train(df):
 			ml_model = pickle.load(f)
 		
 		f.close()
-		ml_model.partial_fit(X_train, Y_train, classes=np.unique(Y_train))
-		
-		with open(model_pkl, 'ab') as f: 
-			pickle.dump(ml_model, f)
-		
-		f.close()
-	else:
-	
-		ml_model = SGDClassifier(loss='hinge', penalty='l2',alpha=1e-3, random_state=42, max_iter=1000)
-		ml_model.partial_fit(X_train, Y_train, classes=np.unique(Y_train))
+		ml_model = ml_model.partial_fit(X_train, Y_train, classes=np.unique(Y_train))
 		
 		with open(model_pkl, 'wb') as f: 
 			pickle.dump(ml_model, f)
 		
 		f.close()
-		
-	file_size = os.path.getsize(model_pkl)
-	print("File Size is :", file_size, "bytes")
+	else:
 	
+		#ml_model = SGDClassifier(loss='log', penalty='l2',alpha=1e-3, random_state=10, max_iter=1000)
+		ml_model = PassiveAggressiveClassifier(random_state = 10 )
+		#ml_model = Perceptron(n_iter=100 ,random_state=10)
+		#ml_model = BernoulliNB()
+		
+		ml_model = ml_model.partial_fit(X_train, Y_train, classes=np.unique(Y_train))
+		
+		with open(model_pkl, 'wb') as f: 
+			pickle.dump(ml_model, f)
+		
+		f.close()
+			
 	return df.rdd
 	
 
@@ -172,35 +171,141 @@ def test(df):
 	X_test = np.array([i[0] for i in df.select('feature1').collect()])
 	
 	
-	vectorizer_pkl = "./Tokenizer/Hashing_Vectorizer.pkl"
+	#vectorizer_pkl = "./Vectorizer/Hashing_Vectorizer.pkl"
+	vectorizer_pkl = "./Vectorizer/PAC_Hashing_Vectorizer.pkl"
+	#vectorizer_pkl = "./Vectorizer/Hashing_Vectorizer.pkl"
+	#vectorizer_pkl = "./Vectorizer/Hashing_Vectorizer.pkl"
 	
 	with open(vectorizer_pkl, 'rb') as f: 
 		vectorizer = pickle.load(f)
 		
 	f.close()
 	
+	#vectorizer = HashingVectorizer(analyzer='word' , stop_words='english', n_features = 1000000, norm='l1')
 	X_test = vectorizer.fit_transform(X_test)
 	
 	Y_test = np.array([int(i[0]) for i in df.select('feature0').collect()])
 	
-	model_pkl = "./Models/SVD_model.pkl"
+	#model_pkl = "./Models/SVD_model.pkl"
+	model_pkl = "./Models/PAC_model.pkl"
+	#model_pkl = "./Models/PTRON_model.pkl"
+	#model_pkl = "./Models/BernoulliNB_model.pkl"
 	
 	with open(model_pkl, 'rb') as f: 
 		ml_model = pickle.load(f)
 	
-	file_size = os.path.getsize(naivebayes_pkl)
-	print("File Size is :", file_size, "bytes")
 	f.close()
+	
 	prediction = ml_model.predict(X_test)
-	print(prediction)
 	
-	
-	print(ml_model.score(X_test, Y_test))
+	print("Accuracy : ", accuracy_score(Y_test, prediction) * 100)
+	print("Classification_report : ", classification_report(Y_test, prediction))
 	
 
+def clustering(df):
+	
+	print("Entered Clustering")
+	
+	df = df.toDF()
+	
+	X_train = np.array([i[0] for i in df.select('feature1').collect()])
+	Y_train = np.array([int(i[0]) for i in df.select('feature0').collect()])
 	
 	
-#--------------------Main------------------------------#
+	vectorizer_pkl = "./Vectorizer/Clustering_Vectorizer.pkl"
+	if ((os.path.exists(vectorizer_pkl)) and (os.path.getsize(vectorizer_pkl) != 0)):
+		
+		with open(vectorizer_pkl, 'rb') as f: 
+			vectorizer = pickle.load(f)
+		
+		f.close()
+		vectorizer = vectorizer.partial_fit(X_train)
+		
+		with open(vectorizer_pkl, 'wb') as f: 
+			pickle.dump(vectorizer, f)
+		
+		f.close()
+	else:
+		
+		vectorizer = HashingVectorizer(analyzer='word' , stop_words='english', n_features = 1000000, norm='l1')
+		vectorizer = vectorizer.partial_fit(X_train)
+		
+		with open(vectorizer_pkl, 'wb') as f: 
+			pickle.dump(vectorizer, f)
+		
+		f.close()
+	
+	
+	X_train = vectorizer.fit_transform(X_train)
+	
+	print("DimX = ", X_train.ndim, "DimY", Y_train.ndim)
+	print("ShapeX = ", X_train.shape, "ShapeY", Y_train.shape)
+	
+	model_pkl = "./Models/Clustering_model.pkl"
+
+	
+	if ((os.path.exists(model_pkl)) and (os.path.getsize(model_pkl) != 0)):
+		
+		with open(model_pkl, 'rb') as f: 
+			ml_model = pickle.load(f)
+		
+		f.close()
+		ml_model = ml_model.partial_fit(X_train)
+		
+		with open(model_pkl, 'wb') as f: 
+			pickle.dump(ml_model, f)
+		
+		f.close()
+	else:
+	
+		ml_model = MiniBatchKMeans(n_clusters = 2, batch_size = 100, random_state = 10, max_iter=100)
+		ml_model = ml_model.partial_fit(X_train)
+		
+		with open(model_pkl, 'wb') as f: 
+			pickle.dump(ml_model, f)
+		
+		f.close()
+	
+	return df.rdd
+	
+def clustering_test(df):
+	
+	print("Entered testing")
+	
+	df = df.toDF()
+	X_test = np.array([i[0] for i in df.select('feature1').collect()])
+	
+	
+	vectorizer_pkl = "./Vectorizer/Clustering_Vectorizer.pkl"
+	
+	with open(vectorizer_pkl, 'rb') as f: 
+		vectorizer = pickle.load(f)
+		
+	f.close()	
+	
+	#vectorizer = HashingVectorizer(analyzer='word' , stop_words='english', n_features = 1000000, norm='l1')
+	X_test = vectorizer.fit_transform(X_test)
+	
+	Y_test = np.array([int(i[0]) for i in df.select('feature0').collect()])
+	
+	model_pkl = "./Models/Clustering_model.pkl"
+	
+	with open(model_pkl, 'rb') as f: 
+		ml_model = pickle.load(f)
+
+	f.close()
+	prediction = ml_model.predict(X_test)
+
+	ar_unique, i = np.unique(prediction, return_counts=True)
+	
+	print("Unique values:", ar_unique)
+	print("Counts:", i)
+	
+	print("Accuracy : ", accuracy_score(Y_test, prediction) * 100)
+	print("Classification_report : ", classification_report(Y_test, prediction))
+
+
+#---------------------------Main------------------------------#
 
 
 if __name__ == '__main__':
@@ -209,33 +314,23 @@ if __name__ == '__main__':
 
 	sql_context = SQLContext(spark_context)
 
-	ssc = StreamingContext(spark_context, 25)
+	ssc = StreamingContext(spark_context, 30)
 
 	datastream = ssc.socketTextStream("localhost",6100)
 
 	data = datastream.transform(func)
-	data.pprint(25)
+	data.pprint(10)
 	
-	data.foreachRDD(train)
+	#Classification
 	
-	#data.pprint(10)
-	#data.foreachRDD(test)
+	#data.foreachRDD(train)
+	data.foreachRDD(test)
 	
+	#Clustering
 	
-	#processedDF = data.transform(preprocessing)
-	#processedDF.pprint(25)
-
-	#trainDF = processedDF.transform(train)
-	#trainDF.pprint(2)
-
-	#processedDF.foreachRDD(train)
-	#processedDF.pprint(2)
-	#processedDF.foreachRDD(test)
-
-
-	#testDF = processedDF.transform(test)
-	#testDF.pprint(25)
-
+	#data.foreachRDD(clustering)
+	#data.foreachRDD(clustering_test)
+	
 	ssc.start()
 	ssc.awaitTermination()
 
